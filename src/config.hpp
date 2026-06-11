@@ -8,16 +8,16 @@ namespace vending::config {
 
 inline constexpr const char *FirmwareVersion = "0.2.0";
 
-inline constexpr const char *WifiSsid = "YOUR_WIFI_SSID";
-inline constexpr const char *WifiPassword = "YOUR_WIFI_PASSWORD";
+inline constexpr const char *WifiSsid = "UnivapWifi";
+inline constexpr const char *WifiPassword = "universidade";
 inline constexpr uint32_t WifiConnectTimeoutMs = 10000;
 inline constexpr uint32_t WifiReconnectIntervalMs = 5000;
 
 inline constexpr int MachineId = 1;
-inline constexpr const char *MachineCode = "vending-univap-01";
-inline constexpr const char *MqttBrokerUri = "mqtt://YOUR_HIVEMQ_HOST:1883";
-inline constexpr const char *MqttUsername = "";
-inline constexpr const char *MqttPassword = "";
+inline constexpr const char *MachineCode = "1";
+inline constexpr const char *MqttBrokerUri = "mqtts://ef9ae0ae01774b9896c153998578af8b.s1.eu.hivemq.cloud:8883";
+inline constexpr const char *MqttUsername = "machine1";
+inline constexpr const char *MqttPassword = "Machine123";
 inline constexpr uint32_t MqttReconnectIntervalMs = 5000;
 inline constexpr uint32_t MqttHeartbeatIntervalMs = 30000;
 inline constexpr uint32_t MqttCommandQueueLength = 3;

@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "config.hpp"
+#include "esp_crt_bundle.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -101,6 +102,7 @@ esp_err_t MqttManager::start() {
 
     esp_mqtt_client_config_t mqttConfig = {};
     mqttConfig.broker.address.uri = config::MqttBrokerUri;
+    mqttConfig.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
     mqttConfig.credentials.client_id = clientId;
     mqttConfig.network.reconnect_timeout_ms = static_cast<int>(config::MqttReconnectIntervalMs);
     mqttConfig.network.disable_auto_reconnect = false;

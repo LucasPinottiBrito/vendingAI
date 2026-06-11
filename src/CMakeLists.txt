@@ -16,6 +16,7 @@ idf_component_register(
         esp_wifi
         freertos
         log
+        mbedtls
         mqtt
         nvs_flash
 )
