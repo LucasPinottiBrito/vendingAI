@@ -31,7 +31,7 @@ bool VendingSlot::vend(uint32_t timeoutMs) {
     const uint64_t timeoutUs = static_cast<uint64_t>(timeoutMs) * MicrosPerMs;
 
     while (static_cast<uint64_t>(esp_timer_get_time() - startedAtUs) < timeoutUs) {
-        motor.stepForward();
+        motor.stepBackward();
 
         if (sensor.isBeamBroken()) {
             motor.release();
@@ -61,7 +61,7 @@ bool VendingSlot::testMotor(uint32_t stepLimit) {
              static_cast<unsigned long>(stepLimit));
 
     for (uint32_t step = 0; step < stepLimit; ++step) {
-        motor.stepForward();
+        motor.stepBackward();
     }
 
     motor.release();
