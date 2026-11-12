@@ -24,9 +24,16 @@ extern "C" void app_main() {
 
     ESP_LOGI(Tag, "[BOOT] Firmware version: %s", vending::config::FirmwareVersion);
     ESP_LOGI(Tag, "[BOOT] Platform: ESP32-S3 / ESP-IDF / PlatformIO");
-    ESP_LOGI(Tag, "[BOOT] Firmware v0.2 MQTT build initialized");
-    ESP_LOGI(Tag, "[BOOT] GPIO map loaded for two motors, two IR sensors, and reserved reed switch");
-    ESP_LOGI(Tag, "[BOOT] MQTT enabled; payment, backend, display, OTA, and persistence remain out of firmware scope");
+    ESP_LOGI(Tag, "[BOOT] Firmware v0.3 MQTT build initialized");
+    ESP_LOGI(Tag, "[BOOT] GPIO map loaded for 16 motor channels and four shared IR beams");
+
+
+    static vending::domain::VendingController controller;
+    const esp_err_t initResult = controller.init();
+    if (initResult != ESP_OK) {
+        ESP_LOGE(Tag, "[BOOT] Vending controller init failed: %s", esp_err_to_name(initResult));
+        return;
+    }
 
     vending::wifi::WifiManager wifiManager;
     const esp_err_t wifiInitResult = wifiManager.init();
@@ -35,13 +42,6 @@ extern "C" void app_main() {
     } else {
         ESP_LOGW(Tag, "[BOOT] Wi-Fi init failed; local serial testing will continue: %s",
                  esp_err_to_name(wifiInitResult));
-    }
-
-    vending::domain::VendingController controller;
-    const esp_err_t initResult = controller.init();
-    if (initResult != ESP_OK) {
-        ESP_LOGE(Tag, "[BOOT] Vending controller init failed: %s", esp_err_to_name(initResult));
-        return;
     }
 
     controller.printStatus();

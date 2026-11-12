@@ -24,18 +24,6 @@ constexpr int HeartbeatTaskStackWords = 4096;
 constexpr int CommandTaskPriority = 5;
 constexpr int HeartbeatTaskPriority = 4;
 
-bool isKnownMotor(int motorId) {
-    return motorId == 1 || motorId == 2;
-}
-
-bool isKnownSensor(int sensorColumnId) {
-    return sensorColumnId == 1 || sensorColumnId == 2;
-}
-
-bool isSupportedPhysicalPair(int motorId, int sensorColumnId) {
-    return (motorId == 1 && sensorColumnId == 1) || (motorId == 2 && sensorColumnId == 2);
-}
-
 }  // namespace
 
 MqttManager::MqttManager(domain::VendingController &controller, wifi::WifiManager &wifiManager)
@@ -322,7 +310,7 @@ void MqttManager::processPayload(const char *payload) {
 
     if (hasLastCompletedCommand && command.commandId == lastCompletedCommandId) {
         ESP_LOGW(Tag, "[MQTT] Duplicate command ignored: %d", command.commandId);
-        publishDispenseEvent("DISPENSE_FAILED", command, 0, 0, "COMMAND_DUPLICATED");
+        // A repeated command must not turn a confirmed delivery into a failure.
         publishMachineLog("WARN", "duplicate_command_ignored");
         return;
     }
@@ -333,7 +321,7 @@ void MqttManager::processPayload(const char *payload) {
         return;
     }
 
-    if (!isKnownMotor(command.motorId)) {
+    if (!motor::MotorController::installed(command.motorId)) {
         ESP_LOGW(Tag, "[MQTT] Rejecting command %d; unknown motor_id=%d",
                  command.commandId,
                  command.motorId);
@@ -341,20 +329,11 @@ void MqttManager::processPayload(const char *payload) {
         return;
     }
 
-    if (!isKnownSensor(command.sensorColumnId)) {
+    if (command.sensorColumnId != 1) {
         ESP_LOGW(Tag, "[MQTT] Rejecting command %d; unknown sensor_column_id=%d",
                  command.commandId,
                  command.sensorColumnId);
         publishDispenseEvent("DISPENSE_FAILED", command, 0, 0, "UNKNOWN_SENSOR_COLUMN_ID");
-        return;
-    }
-
-    if (!isSupportedPhysicalPair(command.motorId, command.sensorColumnId)) {
-        ESP_LOGW(Tag, "[MQTT] Rejecting command %d; unsupported motor/sensor pair %d/%d",
-                 command.commandId,
-                 command.motorId,
-                 command.sensorColumnId);
-        publishDispenseEvent("DISPENSE_FAILED", command, 0, 0, "INVALID_COMMAND");
         return;
     }
 
@@ -391,35 +370,18 @@ void MqttManager::processPayload(const char *payload) {
 
     publishDispenseEvent("DISPENSE_STARTED", command, 1, 0, "");
 
-    for (int attempt = 1; attempt <= attemptsAllowed; ++attempt) {
-        const bool success = controller.vendSlot(command.motorId, timeoutMs);
-        if (success) {
-            bool beamBroken = false;
-            bool rawHigh = false;
-            controller.getSensorState(command.sensorColumnId, &beamBroken, &rawHigh);
-
-            if (beamBroken) {
-                publishDispenseEvent("SENSOR_TRIGGERED", command, attempt, attempt, "");
-            }
-
-            publishDispenseEvent("DISPENSE_SUCCESS", command, attempt, attempt, "");
-            hasLastCompletedCommand = true;
-            lastCompletedCommandId = command.commandId;
-            publishHeartbeat();
-            return;
-        }
-
-        if (controller.isVendInProgress()) {
-            publishDispenseEvent("DISPENSE_FAILED", command, attempt, attempt, "MACHINE_BUSY");
-            return;
-        }
-
-        if (attempt < attemptsAllowed) {
-            publishDispenseEvent("DISPENSE_RETRY", command, attempt + 1, attempt, "PRODUCT_NOT_DETECTED");
-        }
+    const auto result = controller.vendSlot(command.motorId, timeoutMs, attemptsAllowed, [&](int next) {
+        publishDispenseEvent("DISPENSE_RETRY", command, next, next-1, "PRODUCT_NOT_DETECTED");
+    });
+    if (result.delivered) {
+        publishDispenseEvent("SENSOR_TRIGGERED", command, result.attempts, result.attempts, "");
+        publishDispenseEvent("DISPENSE_SUCCESS", command, result.attempts, result.attempts, "");
+    } else {
+        publishDispenseEvent("DISPENSE_FAILED", command, result.attempts, result.attempts, result.reason);
     }
-
-    publishDispenseEvent("DISPENSE_FAILED", command, attemptsAllowed, attemptsAllowed, "PRODUCT_NOT_DETECTED");
+    if (result.mechanicalFault) {
+        publishDispenseEvent("MOTOR_ERROR", command, result.attempts, result.attempts, result.reason);
+    }
     hasLastCompletedCommand = true;
     lastCompletedCommandId = command.commandId;
     publishHeartbeat();

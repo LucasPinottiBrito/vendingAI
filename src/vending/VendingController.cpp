@@ -1,227 +1,108 @@
 #include "vending/VendingController.hpp"
-
-#include "config.hpp"
 #include "esp_log.h"
-
+#include "esp_timer.h"
+#include "nvs_flash.h"
+#include "freertos/task.h"
 namespace vending::domain {
-
-namespace {
-
-constexpr const char *Tag = "VEND";
-constexpr const char *SensorTag = "SENSOR";
-constexpr const char *StatusTag = "STATUS";
-
-esp_err_t logInitError(const char *name, esp_err_t result) {
-    if (result != ESP_OK) {
-        ESP_LOGE(Tag, "[VEND] %s init failed: %s", name, esp_err_to_name(result));
-    }
-
-    return result;
-}
-
-}  // namespace
-
-VendingController::VendingController()
-    : motor1(config::Motor1In1, config::Motor1In2, config::Motor1In3, config::Motor1In4),
-      motor2(config::Motor2In1, config::Motor2In2, config::Motor2In3, config::Motor2In4),
-      sensor1(config::IrSensor1, config::IrSensorsActiveLow),
-      sensor2(config::IrSensor2, config::IrSensorsActiveLow),
-      slot1(1, motor1, sensor1),
-      slot2(2, motor2, sensor2),
-      machineState(MachineState::BOOTING),
-      vendInProgress(false),
-      operationMutex(xSemaphoreCreateMutex()) {}
-
 esp_err_t VendingController::init() {
-    ESP_LOGI(Tag, "[VEND] Initializing motors and sensors");
-
-    if (operationMutex == nullptr) {
-        ESP_LOGE(Tag, "[VEND] Failed to create operation mutex");
-        machineState = MachineState::ERROR;
-        return ESP_ERR_NO_MEM;
-    }
-
-    esp_err_t result = logInitError("Motor 1", motor1.init());
-    if (result != ESP_OK) {
-        machineState = MachineState::ERROR;
-        return result;
-    }
-
-    result = logInitError("Motor 2", motor2.init());
-    if (result != ESP_OK) {
-        machineState = MachineState::ERROR;
-        return result;
-    }
-
-    result = logInitError("IR sensor 1", sensor1.init());
-    if (result != ESP_OK) {
-        machineState = MachineState::ERROR;
-        return result;
-    }
-
-    result = logInitError("IR sensor 2", sensor2.init());
-    if (result != ESP_OK) {
-        machineState = MachineState::ERROR;
-        return result;
-    }
-
-    machineState = MachineState::READY;
-    ESP_LOGI(Tag, "[VEND] Vending controller ready");
+    esp_err_t err = motor.init();
+    if (err != ESP_OK) return err;
+    mutex = xSemaphoreCreateMutex();
+    if (!mutex) return ESP_ERR_NO_MEM;
+    err = detector.init();
+    if (err != ESP_OK) return err;
+    err = nvs_flash_init();
+    if (err != ESP_OK) return err;
+    err = nvs_open("motors", NVS_READWRITE, &storage);
+    if (err != ESP_OK) return err;
+    uint16_t saved = 0;
+    err = nvs_get_u16(storage, "blocked", &saved);
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) return err;
+    blocked = saved;
+    state = MachineState::READY;
     return ESP_OK;
 }
-
-bool VendingController::vendSlot(int slotId) {
-    return vendSlot(slotId, config::VendTimeoutMs);
+bool VendingController::setBlocked(uint16_t value) {
+    if (nvs_set_u16(storage,"blocked",value) != ESP_OK || nvs_commit(storage) != ESP_OK) {
+        state = MachineState::ERROR;
+        return false;
+    }
+    blocked = value;
+    return true;
 }
-
-bool VendingController::vendSlot(int slotId, uint32_t timeoutMs) {
-    ESP_LOGI(Tag, "[VEND] Slot %d requested", slotId);
-
-    if (operationMutex == nullptr || xSemaphoreTake(operationMutex, 0) != pdTRUE) {
-        ESP_LOGW(Tag, "[VEND] Slot %d rejected; another operation is active", slotId);
-        return false;
+VendResult VendingController::run(int id, uint32_t timeout, int attempts, bool observeDrop,
+                                  const std::function<void(int)> &retry) {
+    VendResult result;
+    if (xSemaphoreTake(mutex,0) != pdTRUE) return result;
+    if (state != MachineState::READY || !motor.installed(id) || (blocked & (1u << (id-1)))) {
+        result.reason = "CHANNEL_UNAVAILABLE";
+    } else {
+        state = MachineState::VENDING;
+        const uint16_t bit = 1u << (id-1);
+        for (int i = 1; i <= attempts; ++i) {
+            // Persist uncertain position before power is applied, including reset mid-cycle.
+            if (!setBlocked(blocked | bit)) { result.reason = "STORAGE_ERROR"; break; }
+            if (observeDrop && detector.arm()) {
+                result.reason = "BARRIER_BLOCKED";
+                printSensors();
+                setBlocked(blocked & ~bit);
+                break;
+            }
+            if (!motor.start(id,timeout)) {
+                detector.finish();
+                setBlocked(blocked & ~bit);
+                result.reason = "START_FAILED";
+                break;
+            }
+            selected = id;
+            result.attempts = i;
+            motor::Cycle cycle;
+            do {
+                cycle = motor.update();
+                if (cycle == motor::Cycle::Running) vTaskDelay(1);
+            } while (cycle == motor::Cycle::Running);
+            selected = 0;
+            result.mechanicalFault = cycle == motor::Cycle::Timeout;
+            if (observeDrop) {
+                const auto end = esp_timer_get_time() + 1000LL * config::DropWindowMs;
+                while (esp_timer_get_time() < end) vTaskDelay(1);
+                const auto sample = detector.finish();
+                result.delivered = sample.beams != 0;
+                ESP_LOGI("DROP","motor=%d beams=0x%x last pulse us=%lld,%lld,%lld,%lld",
+                         id,sample.beams,sample.durationUs[0],sample.durationUs[1],
+                         sample.durationUs[2],sample.durationUs[3]);
+            }
+            if (result.mechanicalFault) { result.reason = "MOTOR_TIMEOUT"; break; }
+            if (!setBlocked(blocked & ~bit)) { result.reason = "STORAGE_ERROR"; break; }
+            if (result.delivered || !observeDrop) { result.reason = "COMPLETE"; break; }
+            result.reason = "PRODUCT_NOT_DETECTED";
+            if (detector.blocked() || i == attempts) break;
+            if (retry) retry(i+1);
+        }
+        if (state != MachineState::ERROR) state = MachineState::READY;
     }
-
-    if (vendInProgress || machineState == MachineState::VENDING) {
-        ESP_LOGW(Tag, "[VEND] Slot %d rejected; machine is already vending", slotId);
-        xSemaphoreGive(operationMutex);
-        return false;
-    }
-
-    VendingSlot *slot = findSlot(slotId);
-    if (slot == nullptr) {
-        ESP_LOGW(Tag, "[VEND] Invalid slot %d; no motor movement", slotId);
-        xSemaphoreGive(operationMutex);
-        return false;
-    }
-
-    if (!slot->isAvailable()) {
-        ESP_LOGW(Tag, "[VEND] Slot %d rejected; state=%s", slotId, slotStateToString(slot->getState()));
-        xSemaphoreGive(operationMutex);
-        return false;
-    }
-
-    vendInProgress = true;
-    machineState = MachineState::VENDING;
-
-    const bool result = slot->vend(timeoutMs);
-
-    machineState = MachineState::READY;
-    vendInProgress = false;
-    xSemaphoreGive(operationMutex);
-
+    lastReason = result.reason;
+    ESP_LOGI("VEND","motor=%d attempts=%d delivered=%d reason=%s",id,result.attempts,result.delivered,result.reason);
+    xSemaphoreGive(mutex);
     return result;
 }
-
-bool VendingController::testMotor(int slotId) {
-    ESP_LOGI(Tag, "[VEND] Slot %d motor test requested", slotId);
-
-    if (operationMutex == nullptr || xSemaphoreTake(operationMutex, 0) != pdTRUE) {
-        ESP_LOGW(Tag, "[VEND] Motor test rejected; another operation is active");
-        return false;
-    }
-
-    if (vendInProgress || machineState == MachineState::VENDING) {
-        ESP_LOGW(Tag, "[VEND] Motor test rejected; machine is vending");
-        xSemaphoreGive(operationMutex);
-        return false;
-    }
-
-    VendingSlot *slot = findSlot(slotId);
-    if (slot == nullptr) {
-        ESP_LOGW(Tag, "[VEND] Invalid slot %d; no motor movement", slotId);
-        xSemaphoreGive(operationMutex);
-        return false;
-    }
-
-    vendInProgress = true;
-    machineState = MachineState::VENDING;
-
-    const bool result = slot->testMotor(config::MotorTestStepLimit);
-
-    machineState = MachineState::READY;
-    vendInProgress = false;
-    xSemaphoreGive(operationMutex);
-
-    return result;
+VendResult VendingController::vendSlot(int id,uint32_t timeout,int attempts,std::function<void(int)> retry) {
+    return run(id,timeout,attempts,true,retry);
 }
-
-void VendingController::printStatus() const {
-    ESP_LOGI(StatusTag, "[STATUS] Machine=%s Slot1=%s Slot2=%s",
-             machineStateToString(machineState),
-             slotStateToString(slot1.getState()),
-             slotStateToString(slot2.getState()));
+void VendingController::testMotor(int id) { run(id,config::VendTimeoutMs,1,false,{}); }
+void VendingController::recover(int id) {
+    if (!motor.installed(id) || xSemaphoreTake(mutex,0) != pdTRUE) return;
+    if (state == MachineState::READY) setBlocked(blocked & ~(1u << (id-1)));
+    xSemaphoreGive(mutex);
 }
-
+void VendingController::printStatus() {
+    ESP_LOGI("STATUS","state=%s motor=%d mode=timed run_ms=%lu blocked=0x%04x last=%s",
+             machineStateToString(state.load()),selected.load(),
+             static_cast<unsigned long>(config::MotorRunMs),blocked.load(),lastReason.load());
+}
 void VendingController::printSensors() const {
-    ESP_LOGI(SensorTag, "[SENSOR] IR1=%s(raw=%s) IR2=%s(raw=%s)",
-             slot1.isSensorBlocked() ? "BLOCKED" : "OK",
-             slot1.readSensorRaw() ? "HIGH" : "LOW",
-             slot2.isSensorBlocked() ? "BLOCKED" : "OK",
-             slot2.readSensorRaw() ? "HIGH" : "LOW");
+    ESP_LOGI("IR","blocked mask=0x%x (bit0=IR1 .. bit3=IR4)",detector.blocked());
 }
-
-MachineState VendingController::getMachineState() const {
-    return machineState;
-}
-
-bool VendingController::isVendInProgress() const {
-    return vendInProgress || machineState == MachineState::VENDING;
-}
-
-bool VendingController::getSlotState(int slotId, SlotState *state) const {
-    if (state == nullptr) {
-        return false;
-    }
-
-    const VendingSlot *slot = findSlot(slotId);
-    if (slot == nullptr) {
-        return false;
-    }
-
-    *state = slot->getState();
-    return true;
-}
-
-bool VendingController::getSensorState(int slotId, bool *beamBroken, bool *rawHigh) const {
-    if (beamBroken == nullptr || rawHigh == nullptr) {
-        return false;
-    }
-
-    const VendingSlot *slot = findSlot(slotId);
-    if (slot == nullptr) {
-        return false;
-    }
-
-    *beamBroken = slot->isSensorBlocked();
-    *rawHigh = slot->readSensorRaw();
-    return true;
-}
-
-VendingSlot *VendingController::findSlot(int slotId) {
-    if (slotId == 1) {
-        return &slot1;
-    }
-
-    if (slotId == 2) {
-        return &slot2;
-    }
-
-    return nullptr;
-}
-
-const VendingSlot *VendingController::findSlot(int slotId) const {
-    if (slotId == 1) {
-        return &slot1;
-    }
-
-    if (slotId == 2) {
-        return &slot2;
-    }
-
-    return nullptr;
-}
-
 const char *machineStateToString(MachineState state) {
     switch (state) {
         case MachineState::BOOTING:

@@ -1,3 +1,7 @@
+# Firmware vigente v0.3
+
+A implementação atual segue README.md e docs/architecture.md, wiring.md, commands.md e mqtt-contract.md. Desde 10/11/2026 o motor é controlado por tempo (`MotorRunMs`), sem leitura/validação de fim de curso; manter confirmação óptica de entrega, timeout e exclusão entre acionamentos. As orientações abaixo documentam a etapa histórica v0.1.
+
 # AGENTS.md — Vending Machine TCC
 
 ## Project identity

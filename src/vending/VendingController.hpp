@@ -1,46 +1,41 @@
 #pragma once
-
-#include <cstdint>
-
-#include "esp_err.h"
-#include "motor/StepperMotor.hpp"
-#include "sensor/IrBreakBeamSensor.hpp"
-#include "vending/VendingSlot.hpp"
+#include <atomic>
+#include <functional>
+#include "motor/MotorController.hpp"
+#include "sensor/DropDetector.hpp"
 #include "vending/VendingTypes.hpp"
-
-#include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "nvs.h"
 
 namespace vending::domain {
-
+struct VendResult {
+    bool delivered = false;
+    bool mechanicalFault = false;
+    int attempts = 0;
+    const char *reason = "MACHINE_BUSY";
+};
 class VendingController {
 public:
-    VendingController();
-
     esp_err_t init();
-    bool vendSlot(int slotId);
-    bool vendSlot(int slotId, uint32_t timeoutMs);
-    bool testMotor(int slotId);
-    void printStatus() const;
+    VendResult vendSlot(int id, uint32_t timeout = config::VendTimeoutMs, int attempts = 1,
+                        std::function<void(int)> retry = {});
+    void testMotor(int id);
+    void recover(int id);
+    void printStatus();
     void printSensors() const;
-    MachineState getMachineState() const;
-    bool isVendInProgress() const;
-    bool getSlotState(int slotId, SlotState *state) const;
-    bool getSensorState(int slotId, bool *beamBroken, bool *rawHigh) const;
-
+    MachineState getMachineState() const { return state.load(); }
+    bool isVendInProgress() const { return state.load() == MachineState::VENDING; }
 private:
-    motor::StepperMotor motor1;
-    motor::StepperMotor motor2;
-    sensor::IrBreakBeamSensor sensor1;
-    sensor::IrBreakBeamSensor sensor2;
-    VendingSlot slot1;
-    VendingSlot slot2;
-    MachineState machineState;
-    bool vendInProgress;
-    SemaphoreHandle_t operationMutex;
-
-    VendingSlot *findSlot(int slotId);
-    const VendingSlot *findSlot(int slotId) const;
+    VendResult run(int id, uint32_t timeout, int attempts, bool observeDrop,
+                   const std::function<void(int)> &retry);
+    bool setBlocked(uint16_t value);
+    motor::MotorController motor;
+    sensor::DropDetector detector;
+    SemaphoreHandle_t mutex = nullptr;
+    std::atomic<MachineState> state{MachineState::BOOTING};
+    std::atomic<int> selected{0};
+    std::atomic<const char *> lastReason{"BOOT"};
+    std::atomic<uint16_t> blocked{0};
+    nvs_handle_t storage{};
 };
-
-}  // namespace vending::domain
+}

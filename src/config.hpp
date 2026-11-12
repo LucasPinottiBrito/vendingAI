@@ -6,7 +6,7 @@
 
 namespace vending::config {
 
-inline constexpr const char *FirmwareVersion = "0.2.0";
+inline constexpr const char *FirmwareVersion = "0.3.0";
 
 inline constexpr const char *WifiSsid = "Ap_42";
 inline constexpr const char *WifiPassword = "Lu81833923";
@@ -27,24 +27,19 @@ inline constexpr uint32_t MqttMaxAttemptsAllowed = 3;
 inline constexpr uint32_t MqttMinVendTimeoutMs = 1;
 inline constexpr uint32_t MqttMaxVendTimeoutMs = 30000;
 
-inline constexpr uint32_t MotorStepDelayMs = 10;
-inline constexpr uint32_t MotorTestStepLimit = 512;
 inline constexpr uint32_t VendTimeoutMs = 10000;
-
-inline constexpr gpio_num_t Motor1In1 = GPIO_NUM_4;
-inline constexpr gpio_num_t Motor1In2 = GPIO_NUM_5;
-inline constexpr gpio_num_t Motor1In3 = GPIO_NUM_6;
-inline constexpr gpio_num_t Motor1In4 = GPIO_NUM_7;
-
-inline constexpr gpio_num_t Motor2In1 = GPIO_NUM_16;
-inline constexpr gpio_num_t Motor2In2 = GPIO_NUM_17;
-inline constexpr gpio_num_t Motor2In3 = GPIO_NUM_18;
-inline constexpr gpio_num_t Motor2In4 = GPIO_NUM_8;
-
-inline constexpr gpio_num_t IrSensor1 = GPIO_NUM_13;
-inline constexpr gpio_num_t IrSensor2 = GPIO_NUM_14;
-inline constexpr gpio_num_t ReedSwitchReserved = GPIO_NUM_12;
-
+// Provisional motor on-time per attempt; calibrate for the installed mechanism.
+inline constexpr uint32_t MotorRunMs = 1000;
+static_assert(MotorRunMs > 0 && MotorRunMs <= VendTimeoutMs,
+              "MotorRunMs must be within the motor safety limit");
+inline constexpr uint32_t DropWindowMs = 750;
+inline constexpr gpio_num_t Data = GPIO_NUM_4, Clock = GPIO_NUM_5, Latch = GPIO_NUM_6, Enable = GPIO_NUM_1;
+inline constexpr gpio_num_t IrPins[] = {GPIO_NUM_2, GPIO_NUM_42, GPIO_NUM_41, GPIO_NUM_40};
 inline constexpr bool IrSensorsActiveLow = true;
-
-}  // namespace vending::config
+struct Channel { unsigned outputBit; bool installed; };
+inline constexpr Channel Channels[] = {
+    {0,true}, {1,true}, {2,true}, {3,false}, {4,false}, {5,false},
+    {6,false}, {7,false}, {8,false}, {9,false}, {10,false}, {11,false},
+    {12,false}, {13,false}, {14,false}, {15,false}
+};
+} // namespace vending::config

@@ -1,85 +1,11 @@
-# Firmware v0.2 Architecture
+# Arquitetura v0.3
 
-Firmware v0.2 is an ESP32-S3 firmware for local hardware validation plus MQTT dispense integration. It uses ESP-IDF APIs through PlatformIO and does not use Arduino.
+MotorController inicializa os GPIOs antes da conexão Wi-Fi e transmite 16 bits com latch. Desde 10/11/2026 cada acionamento termina pelo tempo `MotorRunMs` (1000 ms provisórios), sem ler ou configurar os GPIOs da antiga cadeia de feedback. ENABLE cai antes da limpeza do latch. O prazo efetivo é o menor entre `MotorRunMs`, o timeout da tentativa e `VendTimeoutMs` (10 s). Se o timeout truncar o tempo configurado, retorna `Timeout`; se forem iguais, retorna `Complete`. O laço consulta o relógio monotônico a cada tick; o desligamento pode ocorrer depois do prazo conforme a latência de escalonamento. Não se trata de corte independente por hardware.
 
-## Main Modules
+DropDetector usa quatro receptores e interrupções nas duas bordas para memorizar a máscara de passagem e a duração do último pulso completo por feixe. Zero na duração indica ausência de pulso completo registrado. A qualificação óptica e a filtragem final dependem da bancada.
 
-- `src/main.cpp`: ESP-IDF `app_main()` entrypoint. Configures stdio, starts Wi-Fi, initializes motors/sensors, starts MQTT, and enters the serial command loop.
-- `src/config.hpp`: firmware version, machine ID, Wi-Fi placeholders, MQTT placeholders, timing constants, GPIO pin map, and sensor behavior.
-- `src/wifi/WifiManager.*`: initializes ESP-IDF Wi-Fi, attempts station connection, tracks state/IP, and periodically reconnects after disconnection.
-- `src/mqtt/MqttManager.*`: starts ESP-MQTT, subscribes to actions, queues incoming payloads, executes validated `DISPENSE` commands, publishes events, and sends heartbeat.
-- `src/mqtt/MqttPayloads.*`: parses MQTT JSON commands with cJSON and builds JSON payloads for events and heartbeat.
-- `src/mqtt/MqttTopics.hpp`: formats MQTT topics from `MachineId`.
-- `src/vending/VendingTypes.hpp`: shared machine/slot states and `DispenseCommand`.
-- `src/motor/StepperMotor.*`: controls one 28BYJ-48 motor through a ULN2003 driver using ESP-IDF GPIO APIs and a half-step sequence.
-- `src/sensor/IrBreakBeamSensor.*`: reads one IR break beam sensor and maps raw GPIO level to logical beam-broken state.
-- `src/vending/VendingSlot.*`: owns per-slot vend/test flows using one motor and one sensor.
-- `src/vending/VendingController.*`: creates two slots, tracks physical machine state, validates slots, blocks simultaneous motor operations with a FreeRTOS mutex, and exposes APIs for serial and MQTT.
-- `src/serial/CommandHandler.*`: parses line-based serial commands and dispatches to vending, Wi-Fi, and MQTT services.
+VendingController mantém um mutex em toda a operação, inclusive entre retentativas. Antes de energizar grava em NVS o canal em posição incerta. Após acionamento concluído por tempo libera o bloqueio, sem comprovar posição ou revolução mecânica. Em timeout (`MOTOR_TIMEOUT`) ou reinício durante o acionamento, o bloqueio persiste até recover N. Falha de persistência coloca a máquina em ERROR. A janela de queda de 750 ms ocorre com potência desligada e também vale após timeout. Uma queda encerra as tentativas mesmo com falha de acionamento; a detecção IR durante o giro é memorizada e não antecipa o término do tempo configurado.
 
-## State Flow
+Um período concluído sem queda resulta em `PRODUCT_NOT_DETECTED`, com retentativa se autorizada pelo comando e com barreira livre. Não há detecção de eixo travado ou confirmação de volta completa. O tempo deve ser ajustado ao mecanismo e à carga para reduzir erro de posicionamento e múltiplas dispensações.
 
-Machine states are:
-
-- `BOOTING`
-- `WIFI_CONNECTING`
-- `MQTT_CONNECTING`
-- `READY`
-- `VENDING`
-- `ERROR`
-
-`VendingController` owns physical states. `MqttManager` computes the heartbeat state from physical state plus Wi-Fi/MQTT connectivity.
-
-Boot flow:
-
-1. Configure stdio for the ESP-IDF console.
-2. Initialize Wi-Fi and attempt initial connection with timeout.
-3. Continue local serial testing even if Wi-Fi fails.
-4. Initialize motors and sensors through `VendingController`.
-5. Start MQTT even if Wi-Fi is not connected; ESP-MQTT auto reconnect handles later network availability.
-6. Enter the serial command loop.
-
-## Vend Flow
-
-For serial `vend 1` / `vend 2`, the controller validates the slot before motor actuation. If another operation is active, the motor is not moved.
-
-For a valid vend:
-
-1. Machine state changes to `VENDING`.
-2. Slot state changes to `RUNNING`.
-3. The motor steps forward.
-4. The matching IR sensor is read between motor steps.
-5. If the sensor detects a product, the motor is released and slot state becomes `SUCCESS`.
-6. If timeout expires, the motor is released and slot state becomes `FAILED`.
-7. Machine state returns to `READY`.
-
-Motor test commands run a fixed number of steps and release coils afterward.
-
-## MQTT Flow
-
-For `MachineId = 1`, MQTT uses:
-
-- `vending/1/actions`
-- `vending/1/events`
-- `vending/1/status`
-
-The MQTT event callback does not move motors. It validates topic/retained/fragmentation status, copies action payloads into a FreeRTOS queue, and a command task processes them.
-
-Only `DISPENSE` is handled. The firmware validates JSON, command type, machine ID, duplicate command ID, machine busy state, motor ID, sensor column ID, supported physical pair, quantity, attempts, and timeout. The firmware uses `issued_at` for command metadata only; v0.2 does not expire commands because the requested payload does not include `expires_at`.
-
-Published events include:
-
-- `DISPENSE_STARTED`
-- `SENSOR_TRIGGERED`
-- `DISPENSE_RETRY`
-- `DISPENSE_SUCCESS`
-- `DISPENSE_FAILED`
-- `MOTOR_ERROR`
-- `MACHINE_ERROR`
-- `MACHINE_LOG`
-
-Heartbeat is published every 30 seconds while MQTT is connected.
-
-## Future v0.3 Note
-
-Future work may add TLS MQTT, command authentication, persistent idempotency, six-motor expansion, OTA, and richer diagnostics. Payment, database, stock, saldo, and backend business rules remain outside the firmware.
+Serial e MQTT usam o mesmo controlador. MQTT correlaciona os eventos pelo command_id, sale_id e slot_id, aciona pelo motor_id e usa sensor_column_id 1. Há deduplicação do último comando em RAM. Reentregas de comandos após reboot ou após outro comando não estão cobertas por esse histórico.

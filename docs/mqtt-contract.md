@@ -1,6 +1,6 @@
-# MQTT Contract - Firmware v0.2
+# MQTT Contract - Firmware v0.3
 
-Firmware v0.2 uses MQTT as the only backend communication channel. The backend publishes actions and the ESP32-S3 publishes status/events.
+Firmware v0.3 uses MQTT as the only backend communication channel. The backend publishes actions and the ESP32-S3 publishes status/events.
 
 ## Topics
 
@@ -46,15 +46,17 @@ The firmware validates:
 - `type == "DISPENSE"`.
 - `machine_id` equals configured `MachineId`.
 - No vend operation is already running.
-- `motor_id` is `1` or `2`.
-- `sensor_column_id` is `1` or `2`.
-- Supported physical pair is `(1,1)` or `(2,2)`.
+- `motor_id` identifies an installed motor in 1..16.
+- `sensor_column_id` is 1 (shared four-beam barrier).
+- Any beam confirms delivery. Motor activation is timed; the end-of-cycle feedback is not read. A safety timeout that truncates activation is reported as MOTOR_ERROR with reason MOTOR_TIMEOUT, even if the product was delivered.
 - `quantity == 1`.
 - `attempts_allowed > 0`.
 - `timeout_ms_per_attempt > 0`.
 - `command_id` does not equal the last completed command ID in RAM.
 
 `attempts_allowed` is capped by `MqttMaxAttemptsAllowed`; timeout is clamped to firmware min/max values.
+
+`MotorRunMs` in `src/config.hpp` sets motor on-time per attempt (provisional 1000 ms). `timeout_ms_per_attempt` remains an upper bound, not the requested on-time. The effective motor limit is also capped by `VendTimeoutMs` (10000 ms). A timeout below `MotorRunMs` stops the motor early and reports `MOTOR_TIMEOUT`; equality completes normally. Elapsed on-time alone never generates delivery success: optical detection is still required. There is a 750 ms observation window with motor off, including after timeout. No payload or backend changes are required for timed activation.
 
 ## Events
 

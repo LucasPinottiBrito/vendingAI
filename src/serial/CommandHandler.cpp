@@ -153,28 +153,21 @@ void CommandHandler::handleLine(const char *line) {
         return;
     }
 
-    if ((std::strcmp(command, "a") == 0 && arg[0] == '\0') ||
-        (std::strcmp(command, "motor") == 0 && std::strcmp(arg, "1") == 0 && extra[0] == '\0')) {
-        controller.testMotor(1);
-        return;
-    }
-
-    if ((std::strcmp(command, "b") == 0 && arg[0] == '\0') ||
-        (std::strcmp(command, "motor") == 0 && std::strcmp(arg, "2") == 0 && extra[0] == '\0')) {
-        controller.testMotor(2);
-        return;
-    }
-
-    if ((std::strcmp(command, "1") == 0 && arg[0] == '\0') ||
-        (std::strcmp(command, "vend") == 0 && std::strcmp(arg, "1") == 0 && extra[0] == '\0')) {
-        controller.vendSlot(1);
-        return;
-    }
-
-    if ((std::strcmp(command, "2") == 0 && arg[0] == '\0') ||
-        (std::strcmp(command, "vend") == 0 && std::strcmp(arg, "2") == 0 && extra[0] == '\0')) {
-        controller.vendSlot(2);
-        return;
+    for (int id = 1; id <= 16; ++id) {
+        const auto n = std::to_string(id);
+        if (normalized == "motor " + n || (id == 1 && normalized == "a") || (id == 2 && normalized == "b")) {
+            controller.testMotor(id);
+            return;
+        }
+        if (normalized == "vend " + n || (id <= 2 && normalized == n)) {
+            controller.vendSlot(id);
+            return;
+        }
+        if (normalized == "recover " + n) {
+            controller.recover(id);
+            controller.printStatus();
+            return;
+        }
     }
 
     printInvalidCommand();
@@ -185,10 +178,7 @@ void CommandHandler::printHelp() const {
     std::printf("  help | h - list commands\n");
     std::printf("  status | c - print machine and slot state\n");
     std::printf("  sensor | s - print IR sensor raw/logical state\n");
-    std::printf("  motor 1 | a - run a limited motor test for slot 1\n");
-    std::printf("  motor 2 | b - run a limited motor test for slot 2\n");
-    std::printf("  vend 1 | 1 - vend slot 1 until sensor detection or timeout\n");
-    std::printf("  vend 2 | 2 - vend slot 2 until sensor detection or timeout\n");
+    std::puts("  motor N | vend N | recover N (after inspection), N=1..16");
     std::printf("  wifi | w - print Wi-Fi status\n");
     std::printf("  mqtt | m - print MQTT status and topics\n");
     std::printf("  heartbeat - publish one MQTT heartbeat when connected\n");

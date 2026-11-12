@@ -13,14 +13,6 @@ enum class MachineState {
     ERROR
 };
 
-enum class SlotState {
-    IDLE,
-    RUNNING,
-    SUCCESS,
-    FAILED,
-    DISABLED
-};
-
 struct DispenseCommand {
     int commandId;
     int saleId;
@@ -37,6 +29,6 @@ struct DispenseCommand {
 };
 
 const char *machineStateToString(MachineState state);
-const char *slotStateToString(SlotState state);
+
 
 }  // namespace vending::domain

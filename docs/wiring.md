@@ -1,53 +1,20 @@
-# Firmware v0.2 Wiring
+# Ligações v0.3 para bancada
 
-The v0.2 firmware still controls only two physical motors and two IR break beam sensors.
+| ESP32-S3 | Sinal | Direção |
+|---|---|---|
+| GPIO4, 5, 6 | DATA, CLOCK, LATCH dos dois 595 | saídas |
+| GPIO1 (J3.4) | ENABLE pelo NPN, HIGH habilita | saída |
+| GPIO15, 16, 17 | Antiga interface dos 165, sem uso nesta versão | não configurados pelo controlador |
+| GPIO2, 42, 41, 40 (J3.5 a J3.8, nessa ordem) | IR1, IR2, IR3, IR4 | entradas digitais ativas em LOW |
 
-## Motor 1
+Vista superior, antena em cima e USB embaixo: J3 é a barra direita. Esta pinagem usa JTAG por USB (padrão da ESP32-S3); não usar JTAG externo nos GPIO40–42 com os sensores conectados. Na migração, mover o fio que vai a R33 e as quatro entradas IR; manter o pino EN/RST da placa livre.
 
-| ULN2003 input | ESP32-S3 GPIO |
-| --- | --- |
-| IN1 | GPIO4 |
-| IN2 | GPIO5 |
-| IN3 | GPIO6 |
-| IN4 | GPIO7 |
+Os quatro GPIOs IR são uma escolha provisória para receptores com saída compatível com 3,3 V. Para coletor aberto, prever pull-up externo a 3,3 V. Conferir modelo, polaridade, alimentação e cabeamento antes de ligar. Cada emissor aponta para seu receptor do outro lado do espaço de queda.
 
-## Motor 2
+A tabela Channels em config.hpp assume ordem crescente QA..QH por banco e habilita motores 1, 2 e 3 para a demonstração. Confirmar instalações e ordem física antes da carga. Verificar GPIO1 → transistor → OE_N nos dois 595 e associação QA..QH a OUT01..16.
 
-| ULN2003 input | ESP32-S3 GPIO |
-| --- | --- |
-| IN1 | GPIO15 |
-| IN2 | GPIO16 |
-| IN3 | GPIO17 |
-| IN4 | GPIO18 |
+**Acionamento por tempo, sem fim de curso:** manter o estágio original com MOSFET N no negativo. Positivo do motor em +12 V; negativo do motor no drain do IRLZ44N; source no GND da fonte e da lógica. Não ligar o negativo do motor diretamente ao GND, pois isso contorna o MOSFET. Manter flyback com cátodo em +12 V e ânodo no drain/negativo do motor.
 
-## Sensors
+O terceiro fio do motor (retorno medido em até 12 V) fica individualmente isolado, sem conexão com ESP32, 165, filtro, GND ou outra alimentação. Não montar a adaptação high-side anteriormente proposta apenas para viabilizar feedback: ela deixou de ser necessária para este modo. Os 165 e filtros de feedback podem ficar fora da montagem. Se já estiverem alimentados, manter entradas em níveis definidos, sem os retornos dos motores conectados.
 
-| Device | ESP32-S3 GPIO | Firmware behavior |
-| --- | --- | --- |
-| IR break beam sensor 1 | GPIO10 | Active-low by default |
-| IR break beam sensor 2 | GPIO11 | Active-low by default |
-| Reed switch | GPIO12 | Reserved, inactive in v0.2 |
-
-## Physical Mapping
-
-| Physical channel | `motor_id` | `sensor_column_id` |
-| --- | ---: | ---: |
-| A1 | 1 | 1 |
-| B1 | 2 | 2 |
-
-The firmware rejects unsupported motor/sensor pairs and does not expand to six motors in v0.2.
-
-## GPIOs To Avoid
-
-Do not use GPIO0, GPIO3, GPIO19, GPIO20, GPIO26-GPIO32, GPIO33-GPIO37, GPIO45, or GPIO46.
-
-These pins are avoided to reduce risk around boot strapping, USB-JTAG, flash, PSRAM, and board-specific conflicts.
-
-## Power Notes
-
-- Motors must use an external 5V supply.
-- Do not power motors from ESP32-S3 USB or 3.3V pins.
-- ESP32-S3 GND and external motor supply GND must be common.
-- ESP32-S3 GPIOs are not 5V tolerant.
-- If an IR sensor outputs 5V, use a level shifter or voltage divider before connecting it to GPIO10 or GPIO11.
-- ULN2003 motor power and ESP32-S3 GPIO signals must share a common ground reference.
+Detalhes: [revisão elétrica vigente por tempo](../../electronic-circuit/Controle_motor_por_tempo.md).
